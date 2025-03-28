@@ -1,139 +1,97 @@
+import os 
+import json
 import asyncio
-from typing import Annotated
+import logging
 
-from livekit import agents, rtc
-from livekit.agents import JobContext, WorkerOptions, cli, tokenize, tts
-from livekit.agents.llm import (
-    ChatContext,
-    ChatImage,
-    ChatMessage,
-)
-from livekit.agents.voice_assistant import VoiceAssistant
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, llm
+from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import deepgram, openai, silero
 
-
-class AssistantFunction(agents.llm.FunctionContext):
-    """This class is used to define functions that will be called by the assistant."""
-
-    @agents.llm.ai_callable(
-        description=(
-            "Called when asked to evaluate something that would require vision capabilities,"
-            "for example, an image, video, or the webcam feed."
-        )
-    )
-    async def image(
-        self,
-        user_msg: Annotated[
-            str,
-            agents.llm.TypeInfo(
-                description="The user message that triggered this function"
-            ),
-        ],
-    ):
-        print(f"Message triggering vision capabilities: {user_msg}")
-        return None
-
-
-async def get_video_track(room: rtc.Room):
-    """Get the first video track from the room. We'll use this track to process images."""
-
-    video_track = asyncio.Future[rtc.RemoteVideoTrack]()
-
-    for _, participant in room.remote_participants.items():
-        for _, track_publication in participant.track_publications.items():
-            if track_publication.track is not None and isinstance(
-                track_publication.track, rtc.RemoteVideoTrack
-            ):
-                video_track.set_result(track_publication.track)
-                print(f"Using video track {track_publication.track.sid}")
-                break
-
-    return await video_track
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ai-interviewer")
 
 
 async def entrypoint(ctx: JobContext):
-    await ctx.connect()
-    print(f"Room name: {ctx.room.name}")
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+    participant = await ctx.wait_for_participant()
+    candidate_id = participant.identity
 
-    chat_context = ChatContext(
-        messages=[
-            ChatMessage(
-                role="system",
-                content=(
-                    "Your name is Alloy. You are a funny, witty bot. Your interface with users will be voice and vision."
-                    "Respond with short and concise answers. Avoid using unpronouncable punctuation or emojis."
-                ),
-            )
-        ]
+    with open('admin_data/jd.json', 'r') as jd_file:
+        jd_data = json.load(jd_file)
+    if os.path.exists('admin_data/prompt.json') and os.path.getsize('admin_data/prompt.json') > 0:
+        with open('admin_data/prompt.json', 'r') as prompt_file:
+            try:
+                additional_instructions = json.load(prompt_file).get('system_prompt', '')
+            except json.JSONDecodeError:
+                additional_instructions = ''
+    else:
+        additional_instructions = ''
+
+    initial_context = llm.ChatContext().append(
+        role="system",
+        text=(
+            f"You are an AI interviewer. You are conducting an interview for a position based on the following job description: {jd_data['job_description']}. "
+            "Your interface with the user is via voice only, asking technical questions. Keep responses concise and to the point. "
+            "Ask one question at a time, focusing on the job requirements, and wait for the answer. "
+            "Analyze the candidate's responses and keep asking appropriate follow-up questions. "
+            "Maintain a professional and encouraging demeanor throughout the interview. "
+            "Avoid using unpronounceable punctuation or emojis."
+            f"{additional_instructions}"
+        )
     )
 
-    gpt = openai.LLM(model="gpt-4o")
+    vad_model = silero.VAD.load() 
+    stt_model = deepgram.STT(model="nova-3-general")  
+    llm_model = openai.LLM(model="gpt-4o") 
+    tts_model = openai.TTS()  
 
-    # Since OpenAI does not support streaming TTS, we'll use it with a StreamAdapter
-    # to make it compatible with the VoiceAssistant
-    openai_tts = tts.StreamAdapter(
-        tts=openai.TTS(voice="alloy"),
-        sentence_tokenizer=tokenize.basic.SentenceTokenizer(),
+    assistant = VoicePipelineAgent(
+        vad=vad_model,
+        stt=stt_model,
+        llm=llm_model,
+        tts=tts_model,
+        chat_ctx=initial_context,
+        allow_interruptions=True
     )
 
-    latest_image: rtc.VideoFrame | None = None
+    def before_llm_callback(chat_context: llm.ChatContext):
+        MAX_HISTORY = 6  
+        messages = chat_context.messages
+        if len(messages) > MAX_HISTORY + 1:
+            system_msg = messages[0]
+            recent_msgs = messages[-MAX_HISTORY:]
+            new_ctx = llm.ChatContext()
+            new_ctx.append(role=system_msg.role, text=system_msg.text)
+            for msg in recent_msgs:
+                new_ctx.append(role=msg.role, text=msg.text or "")
+            assistant.chat_ctx = new_ctx
+        return None
 
-    assistant = VoiceAssistant(
-        vad=silero.VAD.load(),  # We'll use Silero's Voice Activity Detector (VAD)
-        stt=deepgram.STT(),  # We'll use Deepgram's Speech To Text (STT)
-        llm=gpt,
-        tts=openai_tts,  # We'll use OpenAI's Text To Speech (TTS)
-        fnc_ctx=AssistantFunction(),
-        chat_ctx=chat_context,
-    )
+    assistant.before_llm_cb = before_llm_callback
 
-    chat = rtc.ChatManager(ctx.room)
+    assistant.start(ctx.room, participant)
+    candidate_responses = []
+    @assistant.on("user_speech_committed")
+    def on_user_speech_committed(msg: llm.ChatMessage):
+        try:
+            response_data = {
+                'candidate_id': candidate_id,
+                'response': msg.content
+            }
+            candidate_responses.append(response_data)
+            with open('conversation_data.json', "w") as f:
+                json.dump(candidate_responses, f, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving responses: {str(e)}")
 
-    async def _answer(text: str, use_image: bool = False):
-        """
-        Answer the user's message with the given text and optionally the latest
-        image captured from the video track.
-        """
-        content: list[str | ChatImage] = [text]
-        if use_image and latest_image:
-            content.append(ChatImage(image=latest_image))
+    await asyncio.sleep(1.0)
+    initial_greeting = "Hello, I am an AI interviewer. Let's begin. Please tell me about yourself."
+    await assistant.say(initial_greeting)
 
-        chat_context.messages.append(ChatMessage(role="user", content=content))
-
-        stream = gpt.chat(chat_ctx=chat_context)
-        await assistant.say(stream, allow_interruptions=True)
-
-    @chat.on("message_received")
-    def on_message_received(msg: rtc.ChatMessage):
-        """This event triggers whenever we get a new message from the user."""
-
-        if msg.message:
-            asyncio.create_task(_answer(msg.message, use_image=False))
-
-    @assistant.on("function_calls_finished")
-    def on_function_calls_finished(called_functions: list[agents.llm.CalledFunction]):
-        """This event triggers when an assistant's function call completes."""
-
-        if len(called_functions) == 0:
-            return
-
-        user_msg = called_functions[0].call_info.arguments.get("user_msg")
-        if user_msg:
-            asyncio.create_task(_answer(user_msg, use_image=True))
-
-    assistant.start(ctx.room)
-
-    await asyncio.sleep(1)
-    await assistant.say("Hi there! How can I help?", allow_interruptions=True)
-
-    while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
-        video_track = await get_video_track(ctx.room)
-
-        async for event in rtc.VideoStream(video_track):
-            # We'll continually grab the latest image from the video track
-            # and store it in a variable.
-            latest_image = event.frame
-
+    try:
+        await asyncio.Future()
+    except Exception as e:
+        logger.info("Interview session ended.")
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))

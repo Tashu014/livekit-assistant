@@ -1,2 +1,6 @@
 .venv
 .env
+admin_data/
+conversation_data.json
+interview_results.json
+__pycache__/
