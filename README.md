@@ -1,10 +1,13 @@
 # LiveKit Assistant
 
-[![Demo Video](https://drive.google.com/file/d/1orXwHBIkRkn8uSH18Ul2klb4AlqvTMmh/view?usp=sharing)](https://drive.google.com/file/d/1lL5JB6ycCZGO12aHRqxhRqex7Twm966_/view?usp=sharing)
+Demo Video
+[![Demo Video](https://static-assets-v2.s3.us-east-2.amazonaws.com/uploads/1743155746229_Screenshot%202025-03-28%20at%201.39.24%C3%A2%C2%80%C2%AFPM.png)](https://youtu.be/Y7uTbt1ITQA)
 
-![Admin - Configure Interviewer Screen](https://drive.google.com/file/d/1JrHB6Jg95_gtqsn59uat6hb7tgjZVtum/view?usp=sharing)
+Admin - Configure Interviewer Screen
+![Admin - Configure Interviewer Screen](https://static-assets-v2.s3.us-east-2.amazonaws.com/uploads/1743155848750_Screenshot%202025-03-28%20at%201.36.40%C3%A2%C2%80%C2%AFPM.png)
 
-![Admin - View Results Screen](https://drive.google.com/file/d/1UH_BgcPsbfuHL6OVGwhhzBuWrYlIgol4/view?usp=sharing)
+Admin - View Results Screen
+![Admin - View Results Screen](https://static-assets-v2.s3.us-east-2.amazonaws.com/uploads/1743155990011_results.png)
 
 First, create a virtual environment, update pip, and install the required packages:
 
