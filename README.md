@@ -1,5 +1,11 @@
 # LiveKit Assistant
 
+[![Demo Video](https://drive.google.com/file/d/1orXwHBIkRkn8uSH18Ul2klb4AlqvTMmh/view?usp=sharing)](https://drive.google.com/file/d/1lL5JB6ycCZGO12aHRqxhRqex7Twm966_/view?usp=sharing)
+
+![Admin - Configure Interviewer Screen](https://drive.google.com/file/d/1JrHB6Jg95_gtqsn59uat6hb7tgjZVtum/view?usp=sharing)
+
+![Admin - View Results Screen](https://drive.google.com/file/d/1UH_BgcPsbfuHL6OVGwhhzBuWrYlIgol4/view?usp=sharing)
+
 First, create a virtual environment, update pip, and install the required packages:
 
 ```
